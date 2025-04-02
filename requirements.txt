@@ -1,0 +1,31 @@
+# Core data science packages
+numpy>=1.18.0
+scipy>=1.4.0
+pandas>=1.0.0
+matplotlib>=3.0.0
+seaborn>=0.10.0
+
+# Machine learning
+scikit-learn>=0.22.0
+
+# Signal processing and analysis
+wfdb>=3.0.0
+PyWavelets>=1.0.0
+neurokit2>=0.1.0
+
+# Data downloading and file handling
+requests>=2.22.0
+tqdm>=4.40.0
+zipfile-deflate64>=0.2.0
+
+# Jupyter and visualization
+jupyter>=1.0.0
+plotly>=4.0.0
+
+# Deep learning (optional, comment out if causing problems)
+tensorflow>=2.0.0; platform_system!="Darwin" or platform_machine!="arm64"
+# For M1/M2 Macs, use the following instead:
+# tensorflow-macos>=2.5.0; platform_system=="Darwin" and platform_machine=="arm64"
+
+# Additional utilities
+h5py>=2.10.0 
