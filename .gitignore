@@ -31,13 +31,13 @@ virtualenv/
 **/env/
 
 # Data directories
-# Exclude entire data directory
+# Exclude entire data directory and all subdirectories
 data/
-# But include processed directories 
-!data/processed/
-!data/processed_nar/
 # Specifically exclude the raw records
 data/records/
+
+# Results directory
+results/
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -61,6 +61,7 @@ data/records/
 *.csv
 *.json
 *.mat
+*.npy
 
 # Exceptions - include these files even if they match patterns above
 # e.g., !important_data/baseline.csv 
