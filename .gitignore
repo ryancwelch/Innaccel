@@ -31,8 +31,13 @@ virtualenv/
 **/env/
 
 # Data directories
+# Exclude entire data directory
 data/
-results/
+# But include processed directories 
+!data/processed/
+!data/processed_nar/
+# Specifically exclude the raw records
+data/records/
 
 # Jupyter Notebook
 .ipynb_checkpoints
