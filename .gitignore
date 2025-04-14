@@ -31,7 +31,12 @@ virtualenv/
 **/env/
 
 # Data directories
+# Exclude entire data directory and all subdirectories
 data/
+# Specifically exclude the raw records
+data/records/
+
+# Results directory
 results/
 
 # Jupyter Notebook
@@ -56,6 +61,7 @@ results/
 *.csv
 *.json
 *.mat
+*.npy
 
 # Exceptions - include these files even if they match patterns above
 # e.g., !important_data/baseline.csv 
