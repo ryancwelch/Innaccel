@@ -7,48 +7,10 @@ from scipy.stats import kurtosis, skew
 import wfdb
 import pywt
 from tqdm import tqdm
+from load_data import load_record
+from load_processed import load_all_processed_records, load_processed_data, get_available_records
+import argparse
 
-def check_record_files(record_name, data_dir="data/records"):
-    """Check if all necessary files exist for a record."""
-    base_path = os.path.join(data_dir, record_name)
-    required_files = ['.dat', '.hea', '.atr']
-    return all(os.path.exists(base_path + ext) for ext in required_files)
-
-def get_valid_records(data_dir="data/records"):
-    """Get list of records with all required files."""
-    all_files = os.listdir(data_dir)
-    record_names = set(f.split('.')[0] for f in all_files)
-    return [r for r in record_names if check_record_files(r, data_dir)]
-
-def load_and_preprocess(record_name, data_dir="data/records"):
-    """Load and preprocess a single record."""
-    record_path = os.path.join(data_dir, record_name)
-    
-    # Load signal and annotations
-    signals, header = wfdb.rdsamp(record_path)
-    annotations = wfdb.rdann(record_path, 'atr')
-    
-    # Preprocess signals
-    fs_original = header['fs']
-    
-    # Normalize and filter
-    normalized = signals - np.mean(signals, axis=0)
-    
-    # Bandpass filter (0.1-4.0 Hz)
-    nyquist = fs_original / 2
-    b, a = signal.butter(3, [0.1/nyquist, 4.0/nyquist], btype='band')
-    filtered = signal.filtfilt(b, a, normalized, axis=0)
-    
-    # Notch filter (50 Hz)
-    b_notch, a_notch = signal.iirnotch(50.0, 30, fs_original)
-    filtered = signal.filtfilt(b_notch, a_notch, filtered, axis=0)
-    
-    # Downsample to 20 Hz
-    target_fs = 20
-    downsample_factor = fs_original // target_fs
-    downsampled = signal.decimate(filtered, downsample_factor, axis=0)
-    
-    return downsampled, target_fs, annotations
 
 def calculate_propagation_features(window_data, fs=20):
     """
@@ -182,10 +144,18 @@ def create_contraction_labels(annotations, signal_length, fs):
 
 def prepare_sequence_data(record_name, data_dir="data/records", window_size=10, step_size=1):
     """Prepare sequence data for LSTM training."""
-    # Load and preprocess
-    signals, fs, annotations = load_and_preprocess(record_name, data_dir)
+    # Load preprocessed data
+    signals, processing_info = load_processed_data(record_name, processed_dir="data/processed")
+    if signals is None:
+        raise ValueError(f"Could not load processed data for record {record_name}")
     
-    # Create labels
+    # Get annotations from original data (since we need them for labels)
+    _, header, annotations = load_record(record_name, data_dir)
+    if annotations is None:
+        print(f"Could not load annotations for record {record_name}")
+        return None, None
+    # Create labels (using the processed signal's sampling rate)
+    fs = processing_info['processed_fs']  # Should be 20 Hz
     labels = create_contraction_labels(annotations, len(signals), fs)
     
     # Calculate window parameters
@@ -198,13 +168,13 @@ def prepare_sequence_data(record_name, data_dir="data/records", window_size=10, 
     y = []  # Labels
     
     # Extract features for each window
-    for i in tqdm(range(n_windows), desc=f"Processing {record_name}"):
+    for i in tqdm(range(n_windows), desc=f"Preparing {record_name}"):
         start_idx = i * step_samples
         end_idx = start_idx + samples_per_window
         
         # Extract window data
         window_data = signals[start_idx:end_idx]
-        window_features = extract_window_features(window_data)
+        window_features = extract_window_features(window_data, fs=fs)
         
         # Get label for this window (majority vote)
         window_label = int(np.mean(labels[start_idx:end_idx]) > 0.5)
@@ -214,49 +184,203 @@ def prepare_sequence_data(record_name, data_dir="data/records", window_size=10, 
     
     return np.array(X), np.array(y)
 
-def main():
-    data_dir = "data/records"
-    output_dir = "data/lstm_data"
-    os.makedirs(output_dir, exist_ok=True)
+def get_feature_names(n_channels):
+    """Get list of all feature names that will be generated."""
+    feature_names = []
     
-    # Get valid records
-    valid_records = get_valid_records(data_dir)
-    print(f"Found {len(valid_records)} valid records")
+    # Propagation features
+    for i in range(n_channels):
+        for j in range(i+1, n_channels):
+            feature_names.extend([
+                f'velocity_ch{i}_ch{j}',
+                f'lag_ch{i}_ch{j}',
+                f'max_corr_ch{i}_ch{j}'
+            ])
     
-    if not valid_records:
-        print("No valid records found!")
-        return
+    # Channel-specific features
+    for ch in range(n_channels):
+        # Time domain features
+        feature_names.extend([
+            f'mean_ch{ch}',
+            f'std_ch{ch}',
+            f'rms_ch{ch}',
+            f'kurtosis_ch{ch}',
+            f'skewness_ch{ch}',
+            f'max_amp_ch{ch}',
+            f'peak_to_peak_ch{ch}'
+        ])
         
-    # Initialize lists for all data
-    all_X = []
-    all_y = []
+        # Frequency domain features
+        feature_names.extend([
+            f'peak_freq_ch{ch}',
+            f'peak_power_ch{ch}',
+            f'energy_0.1_0.3Hz_ch{ch}',
+            f'energy_0.3_1Hz_ch{ch}',
+            f'energy_1_3Hz_ch{ch}',
+            f'median_freq_ch{ch}',
+            f'mean_freq_ch{ch}',
+            f'spectral_edge_90_ch{ch}',
+            f'spectral_edge_95_ch{ch}',
+            f'spectral_entropy_ch{ch}'
+        ])
+        
+        # Wavelet features
+        for i in range(5):  # 4 levels + approximation
+            feature_names.append(f'wavelet_energy_level{i}_ch{ch}')
+        
+        # Cross-channel features (if not first channel)
+        if ch > 0:
+            feature_names.extend([
+                f'mean_coherence_ch{ch-1}_ch{ch}',
+                f'max_coherence_ch{ch-1}_ch{ch}',
+                f'max_coherence_freq_ch{ch-1}_ch{ch}'
+            ])
     
-    # Process each record
-    for record in valid_records[:5]:
-        X, y = prepare_sequence_data(record, data_dir)
-        all_X.append(X)
-        all_y.append(y)
+    return feature_names
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Prepare EHG sequence data for LSTM training',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
     
-    # Combine all data
-    X_combined = np.vstack(all_X)
-    y_combined = np.hstack(all_y)
+    # Directory arguments
+    parser.add_argument('--data_dir', type=str, default='data/records',
+                      help='Directory containing the raw data files')
+    parser.add_argument('--processed_dir', type=str, default='data/processed',
+                      help='Directory containing processed signals')
+    parser.add_argument('--output_dir', type=str, default='data/lstm_data',
+                      help='Directory to save LSTM-ready data')
+    
+    # Window parameters
+    parser.add_argument('--window_size', type=int, default=45,
+                      help='Window size in seconds')
+    parser.add_argument('--step_size', type=int, default=5,
+                      help='Step size in seconds (window stride)')
+    
+    # Processing options
+    parser.add_argument('--use_nar', action='store_true',
+                      help='Use NAR (No Artifact Removal) processed signals instead of standard processed signals')
+    parser.add_argument('--max_records', type=int, default=None,
+                      help='Maximum number of records to process (default: all)')
+    parser.add_argument('--verbose', action='store_true',
+                      help='Print detailed processing information')
+    
+    args = parser.parse_args()
+    
+    # Create necessary directories
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    # Get list of available records
+    std_records, nar_records = get_available_records()
+    records_to_use = nar_records if args.use_nar else std_records
+    processed_dir = 'data/processed_nar' if args.use_nar else args.processed_dir
+
+    if not records_to_use:
+        print(f"No {'NAR' if args.use_nar else 'standard'} processed records found! Please run preprocess_ehg.py first.")
+        return
+    
+    print(f"Found {len(std_records)} standard processed records")
+    print(f"Found {len(nar_records)} NAR processed records")
+    print(f"Using {'NAR' if args.use_nar else 'standard'} processed records")
+    
+    # Load first record to get number of channels and features
+    signals, _ = load_processed_data(records_to_use[0], processed_dir)
+    n_channels = signals.shape[1]
+    
+    # Get feature names
+    feature_names = get_feature_names(n_channels)
+    n_features = len(feature_names)
+    
+    # Save feature names
+    output_prefix = 'nar_' if args.use_nar else ''
+    with open(os.path.join(args.output_dir, f'{output_prefix}feature_names.txt'), 'w') as f:
+        for name in feature_names:
+            f.write(f"{name}\n")
+    
+    # Limit number of records if specified
+    if args.max_records is not None:
+        records_to_use = records_to_use[:args.max_records]
+        print(f"Limited to processing {args.max_records} records")
+    
+    # Process each record and track sequence lengths
+    all_sequences = []
+    all_labels = []
+    sequence_lengths = []
+    total_positive = 0
+    total_samples = 0
+    
+    for record in tqdm(records_to_use, desc="Processing records"):
+        try:
+            if args.verbose:
+                print(f"\nProcessing record: {record}")
+            X, y = prepare_sequence_data(
+                record, 
+                data_dir=args.data_dir,
+                window_size=args.window_size,
+                step_size=args.step_size
+            )
+            if X is None or y is None:
+                print(f"Skipping record {record} due to missing annotations")
+                continue
+                
+            all_sequences.append(X)
+            all_labels.append(y)
+            sequence_lengths.append(len(X))
+            total_positive += np.sum(y)
+            total_samples += len(y)
+            
+            if args.verbose:
+                print(f"Successfully processed {record}")
+        except Exception as e:
+            print(f"Error processing record {record}: {str(e)}")
+            continue
+    
+    if not all_sequences:
+        print("No records were successfully processed!")
+        return
+    
+    # Find maximum sequence length
+    max_length = max(sequence_lengths)
+    
+    # Create padded arrays
+    X_padded = np.zeros((len(records_to_use), max_length, n_features))
+    y_padded = np.zeros((len(records_to_use), max_length))
+    
+    # Fill the padded arrays
+    for i, (X, y) in enumerate(zip(all_sequences, all_labels)):
+        seq_length = len(X)
+        X_padded[i, :seq_length, :] = X
+        y_padded[i, :seq_length] = y
     
     # Save as numpy arrays
-    np.save(os.path.join(output_dir, 'X_sequence.npy'), X_combined)
-    np.save(os.path.join(output_dir, 'y_sequence.npy'), y_combined)
-    
-    # Get feature names using the first record's data
-    first_record = valid_records[0]
-    signals, fs, _ = load_and_preprocess(first_record, data_dir)
-    dummy_window = signals[:fs*10, :]  # 10-second window
-    feature_names = list(extract_window_features(dummy_window).keys())
-    
-    with open(os.path.join(output_dir, 'feature_names.txt'), 'w') as f:
-        f.write('\n'.join(feature_names))
-    
-    print(f"Saved sequence data with shape: {X_combined.shape}")
-    print(f"Positive samples (contractions): {np.sum(y_combined)}/{len(y_combined)}")
-    print(f"Number of features: {len(feature_names)}")
+    np.save(os.path.join(args.output_dir, f'{output_prefix}X_sequence.npy'), X_padded)
+    np.save(os.path.join(args.output_dir, f'{output_prefix}y_sequence.npy'), y_padded)
+    np.save(os.path.join(args.output_dir, f'{output_prefix}sequence_lengths.npy'), np.array(sequence_lengths))
+
+    # Save configuration
+    config = {
+        'window_size': args.window_size,
+        'step_size': args.step_size,
+        'processed_dir': processed_dir,
+        'use_nar': args.use_nar,
+        'num_records': len(records_to_use),
+        'data_shape': X_padded.shape,
+        'max_sequence_length': max_length,
+        'sequence_lengths': sequence_lengths,
+        'processed_records': records_to_use
+    }
+    np.save(os.path.join(args.output_dir, f'{output_prefix}config.npy'), config)
+
+    print(f"\nProcessing Summary:")
+    print(f"Successfully processed {len(records_to_use)} records")
+    print(f"Window size: {args.window_size}s, Step size: {args.step_size}s")
+    print(f"Final sequence data shape (n_records, max_seq_len, n_features): {X_padded.shape}")
+    print(f"Maximum sequence length: {max_length}")
+    print(f"Sequence lengths range: {min(sequence_lengths)} - {max(sequence_lengths)}")
+    print(f"Total samples: {total_samples}")
+    print(f"Positive samples (contractions): {total_positive}/{total_samples}")
+    print(f"Data saved to: {args.output_dir}")
 
 if __name__ == "__main__":
     main() 

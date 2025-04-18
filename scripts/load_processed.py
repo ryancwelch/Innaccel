@@ -299,6 +299,31 @@ def list_available_records(verbose=True):
     else:
         print(f"  Directory not found: {nar_dir}")
 
+def get_available_records(verbose=True):
+    """Returns a list of all available processed records in both directories"""
+    std_dir = get_absolute_path("data/processed")
+    nar_dir = get_absolute_path("data/processed_nar")
+    
+    std_records = []
+    nar_records = []
+    
+    if os.path.exists(std_dir):
+        files = os.listdir(std_dir)
+        records = sorted(set([f.split('_processed')[0] for f in files if f.endswith('_processed.npy')]))
+        std_records.extend(records)
+    else:
+        print(f"  Directory not found: {std_dir}")
+    
+    print("\nNAR processed records:")
+    if os.path.exists(nar_dir):
+        files = os.listdir(nar_dir)
+        records = sorted(set([f.split('_processed')[0] for f in files if f.endswith('_processed.npy')]))
+        nar_records.extend(records)
+    else:
+        print(f"  Directory not found: {nar_dir}")
+    
+    return std_records, nar_records
+
 def main():
     parser = argparse.ArgumentParser(
         description='Load processed EHG signals from standard or NAR processing',

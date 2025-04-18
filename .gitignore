@@ -35,6 +35,7 @@ virtualenv/
 data/
 # Specifically exclude the raw records
 data/records/
+model_weights/
 
 # Results directory
 results/

@@ -308,7 +308,25 @@ def process_batch(args):
     # Remove duplicates (each record has multiple associated files)
     record_names = list(set(record_files))
     
-    print(f"Found {len(record_names)} records to process")
+    # Check which records are already processed
+    output_dir = "data/processed_nar" if args.skip_artifact_removal else args.output_dir
+    already_processed = []
+    
+    for record in record_names:
+        processed_file = os.path.join(output_dir, f"{record}_processed.npy")
+        info_file = os.path.join(output_dir, f"{record}_processing_info.npy")
+        if os.path.exists(processed_file) and os.path.exists(info_file):
+            already_processed.append(record)
+    
+    print(f"Found {len(record_names)} total records")
+    print(f"Already processed: {len(already_processed)} records")
+    
+    # Skip already processed records unless overwrite is specified
+    if not args.overwrite and already_processed:
+        record_names = [r for r in record_names if r not in already_processed]
+        print(f"Processing {len(record_names)} new records")
+    else:
+        print(f"Processing all {len(record_names)} records")
     
     # Store processing info for all records
     all_processing_info = {}
@@ -318,7 +336,7 @@ def process_batch(args):
         _, _, _, processing_info = preprocess_record(
             record_name, 
             args.data_dir, 
-            args.output_dir,
+            output_dir,
             args.lowcut,
             args.highcut,
             args.target_fs,
@@ -337,7 +355,7 @@ def process_batch(args):
             }
     
     # Save summary of all processing info
-    summary_path = os.path.join(args.output_dir, "all_processing_summary.npy")
+    summary_path = os.path.join(output_dir, "all_processing_summary.npy")
     np.save(summary_path, all_processing_info)
     print(f"Saved processing summary for all records to {summary_path}")
     
@@ -373,6 +391,10 @@ def main():
                        help='Save intermediate results from each processing step')
     parser.add_argument('--batch', action='store_true', 
                        help='Process all records in the data directory')
+    
+    # Add to existing arguments
+    parser.add_argument('--overwrite', default=False, action='store_true',
+                       help='Overwrite existing processed files')
     
     args = parser.parse_args()
     

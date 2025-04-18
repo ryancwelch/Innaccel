@@ -28,4 +28,6 @@ tensorflow>=2.0.0; platform_system!="Darwin" or platform_machine!="arm64"
 # tensorflow-macos>=2.5.0; platform_system=="Darwin" and platform_machine=="arm64"
 
 # Additional utilities
-h5py>=2.10.0 
+h5py>=2.10.0
+
+torch
