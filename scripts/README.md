@@ -149,6 +149,7 @@ python prepare_lstm_data.py \
 
 For each window, the following features are extracted:
 
+Features:
 1. Time Domain Features:
    - Mean, standard deviation, RMS
    - Kurtosis, skewness
@@ -173,6 +174,10 @@ For each window, the following features are extracted:
 5. Cross-channel Features:
    - Mean and max coherence
    - Maximum coherence frequency
+
+- add shape based logic
+
+(n_records, max_seq_length, num_features)
 
 #### Output Files
 
