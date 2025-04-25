@@ -10,7 +10,7 @@ import sys
 # Import custom modules
 from load_processed import load_processed_data, get_available_records
 from load_contractions import load_contraction_annotations_from_csv, create_contraction_labels
-from prepare_lstm_data import extract_window_features, get_feature_names
+from extract_features import extract_window_features, get_feature_names
 
 def prepare_contraction_dataset(record_name, annotations_dict, 
                               processed_dir="data/processed", 
