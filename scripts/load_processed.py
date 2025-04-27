@@ -299,10 +299,10 @@ def list_available_records(verbose=True):
     else:
         print(f"  Directory not found: {nar_dir}")
 
-def get_available_records(verbose=True):
+def get_available_records(processed_dir="data/processed", verbose=True):
     """Returns a list of all available processed records in both directories"""
-    std_dir = get_absolute_path("data/processed")
-    nar_dir = get_absolute_path("data/processed_nar")
+    std_dir = get_absolute_path(processed_dir)
+    nar_dir = get_absolute_path(f"{processed_dir}_nar")
     
     std_records = []
     nar_records = []

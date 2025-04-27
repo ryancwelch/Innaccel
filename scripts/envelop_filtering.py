@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 Created on Thu Sep 14 14:35:01 2023
@@ -14,19 +15,60 @@ import math
 from load_contractions import load_contraction_annotations_from_csv
 from load_processed import load_processed_data
 import random
+from numba import jit
 
+@jit(nopython=True)
 def cosineSimilarity(vecA, vecB):
+    """
+    Calculate the cosine similarity between two vectors.
+    
+    Cosine similarity measures the cosine of the angle between two vectors,
+    providing a measure of their directional similarity regardless of magnitude.
+    A value of 1 indicates identical direction, 0 indicates orthogonality,
+    and -1 indicates opposite direction.
+    
+    Parameters:
+    -----------
+    vecA : numpy.ndarray
+        First input vector
+    vecB : numpy.ndarray
+        Second input vector
+        
+    Returns:
+    --------
+    float
+        Cosine similarity score between the two vectors
+    """
     dot_product = np.dot(vecA, vecB)
     norm_vec1 = np.linalg.norm(vecA)
-    norm_vac2 = np.linalg.norm(vecB)
-    cosine_similarity_score = dot_product / (norm_vec1 * norm_vac2)
-    return cosine_similarity_score
+    norm_vec2 = np.linalg.norm(vecB)
+    return dot_product / (norm_vec1 * norm_vec2)
 
+@jit(nopython=True)
 def reactangleIndetification(vecA, vecB):
+    """
+    Calculate the rectangle index between two vectors.
+    
+    The rectangle index measures how well two vectors can be approximated
+    by rectangles (constant values). It calculates the product of cosine
+    similarities between each vector and its median-based rectangle.
+    
+    Parameters:
+    -----------
+    vecA : numpy.ndarray
+        First input vector
+    vecB : numpy.ndarray
+        Second input vector
+        
+    Returns:
+    --------
+    float
+        Rectangle index score, higher values indicate more rectangular shapes
+    """
     medianA = np.median(vecA)
     medianB = np.median(vecB)
-    boxA = medianA*np.ones(vecA.shape[0])
-    boxB = medianB * np.ones(vecA.shape[0])
+    boxA = medianA * np.ones_like(vecA)
+    boxB = medianB * np.ones_like(vecB)
     simboxA = cosineSimilarity(vecA, boxA)
     simboxB = cosineSimilarity(vecB, boxB)
     return simboxA * simboxB
@@ -61,86 +103,168 @@ def filterPeaksFit(peaks_X, Peaks_Y, direction):
                 fPeaks_Y.append(Peaks_Y[i])
     return fPeaks_X, fPeaks_Y
 
-def calculate_envelope_features(signal_data, fs=20, return_visualization=False):
+def calculate_envelope_features(
+    signal_data, 
+    fs=20, 
+    return_visualization=False,
+    # Hyperparameters for peak detection
+    peak_height_threshold=0,
+    peak_distance=None,
+    # Hyperparameters for first stage filtering
+    first_stage_percentile=70,
+    # Hyperparameters for second stage filtering
+    second_stage_multiplier=1.2,
+    # Hyperparameters for point of interest detection
+    poi_distance_threshold=10,
+    # Hyperparameters for area analysis
+    min_segment_length=5
+):
     """
-    Calculate envelope features from signal data.
+    Calculate envelope features from signal data with configurable parameters.
+    
+    This function performs the following steps:
+    1. Peak Detection: Identifies local maxima and minima in the signal
+    2. First Stage Filtering: Removes peaks below/above percentile thresholds
+    3. Point of Interest Detection: Finds midpoints between positive and negative peaks
+    4. Second Stage Filtering: Further refines peaks using median-based thresholds
+    5. Envelope Creation: Constructs upper and lower envelopes using PCHIP interpolation
+    6. Feature Extraction: Calculates statistical features from the envelopes
+    
+    The function is optimized for performance and allows tuning of key parameters
+    for different signal characteristics.
     
     Parameters:
     -----------
     signal_data : numpy.ndarray
         Input signal data (1D array)
     fs : int, optional
-        Sampling frequency (default: 20)
+        Sampling frequency in Hz (default: 20)
     return_visualization : bool, optional
         Whether to return visualization data (default: False)
+    peak_height_threshold : float, optional
+        Minimum height of peaks to consider (default: 0)
+    peak_distance : int, optional
+        Minimum distance between peaks in samples (default: None)
+    first_stage_percentile : float, optional
+        Percentile threshold for first stage filtering (default: 70)
+    second_stage_multiplier : float, optional
+        Multiplier for second stage filtering threshold (default: 1.2)
+    poi_distance_threshold : int, optional
+        Maximum distance between peaks to consider as points of interest (default: 10)
+    min_segment_length : int, optional
+        Minimum length of segments for area analysis (default: 5)
     
     Returns:
     --------
     dict
-        Dictionary containing envelope features
+        Dictionary containing the following envelope features:
+        - envelope_upper_mean: Mean of upper envelope
+        - envelope_upper_std: Standard deviation of upper envelope
+        - envelope_lower_mean: Mean of lower envelope
+        - envelope_lower_std: Standard deviation of lower envelope
+        - envelope_range_mean: Mean of envelope range
+        - envelope_range_std: Standard deviation of envelope range
+        - envelope_symmetry: Symmetry measure between upper and lower envelopes
+        - area_coefficient_mean: Mean of area coefficients (0 if no valid segments)
+        - area_coefficient_std: Standard deviation of area coefficients (0 if no valid segments)
+        - cosine_similarity_mean: Mean of cosine similarities (0 if no valid segments)
+        - cosine_similarity_std: Standard deviation of cosine similarities (0 if no valid segments)
+        - rectangle_index_mean: Mean of rectangle indices (0 if no valid segments)
+        - rectangle_index_std: Standard deviation of rectangle indices (0 if no valid segments)
+    
     dict (optional)
-        Dictionary containing visualization data if return_visualization is True
+        Dictionary containing visualization data if return_visualization is True:
+        - signal: Original signal
+        - upper_envelope: Upper envelope
+        - lower_envelope: Lower envelope
+        - peaks_p: Positive peak locations
+        - peaks_n: Negative peak locations
+        - point_of_interests: Points of interest locations
     """
     features = {}
     vis_data = {}
     
-    # signal_data should already be 1D, no need to reshape
-    x = signal_data
+    # Initialize area-based features to 0
+    features['area_coefficient_mean'] = 0.0
+    features['area_coefficient_std'] = 0.0
+    features['cosine_similarity_mean'] = 0.0
+    features['cosine_similarity_std'] = 0.0
+    features['rectangle_index_mean'] = 0.0
+    features['rectangle_index_std'] = 0.0
     
-    # Find peaks
-    peaks_p, _ = find_peaks(x, height=0)
-    peaks_p = np.concatenate(([0], peaks_p))
-    peaks_n, _ = find_peaks(-x, height=0)
-    peaks_n = np.concatenate(([0], peaks_n))
+    # Ensure signal is 1D
+    x = signal_data.flatten()
     
-    # First stage filtering
-    fPeaksX_p, fPeaksY_p = filterPeaks(peaks_p, x[peaks_p], direction=0)
-    fPeaksX_n, fPeaksY_n = filterPeaks(peaks_n, x[peaks_n], direction=1)
+    # Find peaks using vectorized operations with configurable parameters
+    peaks_p, _ = find_peaks(x, height=peak_height_threshold, distance=peak_distance)
+    peaks_n, _ = find_peaks(-x, height=peak_height_threshold, distance=peak_distance)
     
-    # Find points of interest (midpoints between positive and negative peaks)
-    PointOfInterests = []
-    for j in range(len(fPeaksX_p)):
-        aPos_Peak = fPeaksX_p[j]
-        distanceMinima = 1000000
-        aNeg_Peak_Select = -1
-        for k in range(len(fPeaksX_n)):
-            aNeg_Peak = fPeaksX_n[k]
-            dist = np.abs(aPos_Peak - aNeg_Peak)
-            if dist < distanceMinima:
-                distanceMinima = dist
-                aNeg_Peak_Select = aNeg_Peak
-        if distanceMinima < 10 * fs:
-            PointOfInterests.append(int(np.mean([aPos_Peak, aNeg_Peak_Select])))
+    # Add start point if not already included
+    if peaks_p[0] != 0:
+        peaks_p = np.concatenate(([0], peaks_p))
+    if peaks_n[0] != 0:
+        peaks_n = np.concatenate(([0], peaks_n))
     
-    # Second stage filtering with points of interest
+    # First stage filtering - vectorized with configurable percentile
+    median_p = np.percentile(x[peaks_p], first_stage_percentile)
+    median_n = np.percentile(x[peaks_n], first_stage_percentile)
+    
+    mask_p = x[peaks_p] < median_p
+    mask_n = x[peaks_n] > median_n
+    
+    fPeaksX_p = peaks_p[mask_p]
+    fPeaksY_p = x[fPeaksX_p]
+    fPeaksX_n = peaks_n[mask_n]
+    fPeaksY_n = x[fPeaksX_n]
+    
+    # Find points of interest using vectorized operations with configurable threshold
+    if len(fPeaksX_p) > 0 and len(fPeaksX_n) > 0:
+        # Create distance matrix between positive and negative peaks
+        dist_matrix = np.abs(fPeaksX_p[:, np.newaxis] - fPeaksX_n)
+        
+        # Find closest negative peak for each positive peak
+        min_dist_idx = np.argmin(dist_matrix, axis=1)
+        min_dist = np.min(dist_matrix, axis=1)
+        
+        # Filter based on configurable distance threshold
+        valid_mask = min_dist < poi_distance_threshold * fs
+        PointOfInterests = np.mean([fPeaksX_p[valid_mask], 
+                                  fPeaksX_n[min_dist_idx[valid_mask]]], 
+                                 axis=0).astype(int)
+    else:
+        PointOfInterests = np.array([], dtype=int)
+    
+    # Second stage filtering - vectorized with configurable multiplier
     x_poi = x.copy()
     x_poi[PointOfInterests] = 0
-    fPeaksX_p, fPeaksY_p = filterPeaksFit(peaks_p, x_poi[peaks_p], direction=0)
-    fPeaksX_n, fPeaksY_n = filterPeaksFit(peaks_n, x_poi[peaks_n], direction=1)
+    
+    median_p = np.median(x_poi[peaks_p])
+    median_n = np.median(x_poi[peaks_n])
+    
+    mask_p = x_poi[peaks_p] > second_stage_multiplier * median_p
+    mask_n = x_poi[peaks_n] < second_stage_multiplier * median_n
+    
+    fPeaksX_p = peaks_p[mask_p]
+    fPeaksY_p = x_poi[fPeaksX_p]
+    fPeaksX_n = peaks_n[mask_n]
+    fPeaksY_n = x_poi[fPeaksX_n]
     
     # Combine points of interest with filtered peaks
-    peaks_p_New = np.concatenate([fPeaksX_p, np.array(PointOfInterests)])
-    peaks_p_New = np.unique(peaks_p_New)
-    peaks_p_New = np.sort(peaks_p_New)
+    peaks_p_New = np.unique(np.concatenate([fPeaksX_p, PointOfInterests]))
+    peaks_n_New = np.unique(np.concatenate([fPeaksX_n, PointOfInterests]))
     
-    peaks_n_New = np.concatenate([fPeaksX_n, np.array(PointOfInterests)])
-    peaks_n_New = np.unique(peaks_n_New)
-    peaks_n_New = np.sort(peaks_n_New)
+    # Create envelopes using vectorized operations
+    upper_peaks = np.maximum(x[peaks_p_New], 0)
+    lower_peaks = np.minimum(x[peaks_n_New], 0)
     
-    # Create envelopes - ensure proper handling of positive and negative values
-    # For upper envelope, ensure all values are non-negative
-    upper_peaks = np.maximum(x[peaks_p_New], 0)  # Force positive values
     csP = pchip(peaks_p_New, upper_peaks)
-    
-    # For lower envelope, ensure all values are non-positive
-    lower_peaks = np.minimum(x[peaks_n_New], 0)  # Force negative values
     csN = pchip(peaks_n_New, lower_peaks)
     
-    xs = np.arange(0, len(x))
-    upper_envelope = np.maximum(csP(xs), 0)  # Ensure upper envelope stays above zero
-    lower_envelope = np.minimum(csN(xs), 0)  # Ensure lower envelope stays below zero
+    xs = np.arange(len(x))
+    upper_envelope = np.maximum(csP(xs), 0)
+    lower_envelope = np.minimum(csN(xs), 0)
     
-    # Calculate features
+    # Calculate basic envelope features
     features['envelope_upper_mean'] = np.mean(upper_envelope)
     features['envelope_upper_std'] = np.std(upper_envelope)
     features['envelope_lower_mean'] = np.mean(lower_envelope)
@@ -149,48 +273,60 @@ def calculate_envelope_features(signal_data, fs=20, return_visualization=False):
     features['envelope_range_std'] = np.std(upper_envelope - lower_envelope)
     features['envelope_symmetry'] = np.mean(np.abs(upper_envelope) - np.abs(lower_envelope))
     
-    # Area analysis
-    PositiveSignal = upper_envelope
-    NegativeSignal = lower_envelope
-    coeffArray = []
-    cosSimArray = []
-    rectIndexArray = []
-    
-    for i in range(len(PointOfInterests) - 1):
-        sp = PointOfInterests[i]
-        ep = PointOfInterests[i + 1]
-        posArea = np.sum(PositiveSignal[sp:ep])
-        negArea = np.sum(NegativeSignal[sp:ep])
+    # Area analysis - vectorized with configurable minimum segment length
+    if len(PointOfInterests) > 1:
+        # Calculate areas between consecutive points of interest
+        start_points = PointOfInterests[:-1]
+        end_points = PointOfInterests[1:]
         
-        # Handle division by zero
-        if posArea + negArea != 0:
-            coeff = np.abs(posArea - negArea) / (posArea + negArea)
-            coeffArray.append(coeff)
+        # Filter segments by minimum length
+        segment_lengths = end_points - start_points
+        valid_segments = segment_lengths >= min_segment_length
+        
+        if np.any(valid_segments):
+            start_points = start_points[valid_segments]
+            end_points = end_points[valid_segments]
             
-            # Calculate cosine similarity only if vectors are not all zeros
-            if np.any(PositiveSignal[sp:ep]) and np.any(NegativeSignal[sp:ep]):
-                cosSim = cosineSimilarity(PositiveSignal[sp:ep], NegativeSignal[sp:ep])
-                cosSimDiff = cosineSimilarity(
-                    pd.Series(PositiveSignal[sp:ep]).diff().values[1:],
-                    pd.Series(NegativeSignal[sp:ep]).diff().values[1:]
-                )
-                cosSim = 0.5*(cosSim + cosSimDiff)
-                cosSimArray.append(cosSim)
+            # Calculate areas using vectorized operations
+            pos_areas = np.array([np.sum(upper_envelope[sp:ep]) for sp, ep in zip(start_points, end_points)])
+            neg_areas = np.array([np.sum(lower_envelope[sp:ep]) for sp, ep in zip(start_points, end_points)])
+            
+            # Calculate coefficients
+            total_areas = pos_areas + neg_areas
+            valid_mask = total_areas != 0
+            if np.any(valid_mask):
+                coeffArray = np.abs(pos_areas[valid_mask] - neg_areas[valid_mask]) / total_areas[valid_mask]
+                features['area_coefficient_mean'] = np.mean(coeffArray)
+                features['area_coefficient_std'] = np.std(coeffArray)
+            
+            # Calculate cosine similarities and rectangle indices
+            cosSimArray = []
+            rectIndexArray = []
+            
+            for sp, ep in zip(start_points[valid_mask], end_points[valid_mask]):
+                pos_segment = upper_envelope[sp:ep]
+                neg_segment = lower_envelope[sp:ep]
                 
-                rectIndex = reactangleIndetification(PositiveSignal[sp:ep], NegativeSignal[sp:ep])
-                if not np.isnan(rectIndex):
-                    rectIndexArray.append(rectIndex)
-    
-    # Add area-based features
-    if coeffArray:
-        features['area_coefficient_mean'] = np.mean(coeffArray)
-        features['area_coefficient_std'] = np.std(coeffArray)
-    if cosSimArray:
-        features['cosine_similarity_mean'] = np.mean(cosSimArray)
-        features['cosine_similarity_std'] = np.std(cosSimArray)
-    if rectIndexArray:
-        features['rectangle_index_mean'] = np.mean(rectIndexArray)
-        features['rectangle_index_std'] = np.std(rectIndexArray)
+                if np.any(pos_segment) and np.any(neg_segment):
+                    cosSim = cosineSimilarity(pos_segment, neg_segment)
+                    cosSimDiff = cosineSimilarity(
+                        np.diff(pos_segment),
+                        np.diff(neg_segment)
+                    )
+                    cosSim = 0.5 * (cosSim + cosSimDiff)
+                    cosSimArray.append(cosSim)
+                    
+                    rectIndex = reactangleIndetification(pos_segment, neg_segment)
+                    if not np.isnan(rectIndex):
+                        rectIndexArray.append(rectIndex)
+            
+            # Update area-based features if we have valid values
+            if len(cosSimArray) > 0:
+                features['cosine_similarity_mean'] = np.mean(cosSimArray)
+                features['cosine_similarity_std'] = np.std(cosSimArray)
+            if len(rectIndexArray) > 0:
+                features['rectangle_index_mean'] = np.mean(rectIndexArray)
+                features['rectangle_index_std'] = np.std(rectIndexArray)
     
     if return_visualization:
         vis_data = {
@@ -199,10 +335,7 @@ def calculate_envelope_features(signal_data, fs=20, return_visualization=False):
             'lower_envelope': lower_envelope,
             'peaks_p': fPeaksX_p,
             'peaks_n': fPeaksX_n,
-            'point_of_interests': PointOfInterests,
-            'area_coefficients': coeffArray,
-            'cosine_similarities': cosSimArray,
-            'rectangle_indices': rectIndexArray
+            'point_of_interests': PointOfInterests
         }
         return features, vis_data
     

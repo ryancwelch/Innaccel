@@ -29,7 +29,7 @@ def calculate_propagation_features(window_data, fs=20):
             lag = lags[np.argmax(corr)] / fs  # Convert to seconds
             
             # Assuming 3.5cm spacing between electrodes (adjust based on actual setup)
-            electrode_spacing = 0.035  # meters
+            electrode_spacing = 0.0175  # meters
             if lag != 0:
                 velocity = electrode_spacing / abs(lag)  # m/s
             else:
@@ -41,7 +41,7 @@ def calculate_propagation_features(window_data, fs=20):
     
     return prop_features
 
-def extract_window_features(window_data, fs=20):
+def extract_window_features(window_data, first_stage_percentile=70, second_stage_multiplier=1.2, fs=20):
     """Extract features from a single window of signal data."""
     features = {}
     window_length = window_data.shape[0]
@@ -52,17 +52,12 @@ def extract_window_features(window_data, fs=20):
     # Get propagation features first
     prop_features = calculate_propagation_features(window_data, fs)
     features.update(prop_features)
-    
-    # Get envelope features for each channel
-    for ch in range(window_data.shape[1]):
-        ch_data = window_data[:, ch]
 
-    
     for ch in range(window_data.shape[1]):
         ch_data = window_data[:, ch]
 
         # envelope features
-        envelope_features = calculate_envelope_features(ch_data, fs)
+        envelope_features = calculate_envelope_features(ch_data, fs, first_stage_percentile=first_stage_percentile, second_stage_multiplier=second_stage_multiplier)
         ch_envelope_features = {f'{k}_ch{ch}': v for k, v in envelope_features.items()}
         features.update(ch_envelope_features)
         
@@ -130,77 +125,6 @@ def extract_window_features(window_data, fs=20):
     
     return features
 
-
-def get_feature_names(n_channels):
-    """Get list of all feature names that will be generated."""
-    feature_names = []
-    
-    # Propagation features
-    for i in range(n_channels):
-        for j in range(i+1, n_channels):
-            feature_names.extend([
-                f'velocity_ch{i}_ch{j}',
-                f'lag_ch{i}_ch{j}',
-                f'max_corr_ch{i}_ch{j}'
-            ])
-    
-    # Channel-specific features
-    for ch in range(n_channels):
-        # Time domain features
-        feature_names.extend([
-            f'mean_ch{ch}',
-            f'std_ch{ch}',
-            f'rms_ch{ch}',
-            f'kurtosis_ch{ch}',
-            f'skewness_ch{ch}',
-            f'max_amp_ch{ch}',
-            f'peak_to_peak_ch{ch}'
-        ])
-        
-        # Frequency domain features
-        feature_names.extend([
-            f'peak_freq_ch{ch}',
-            f'peak_power_ch{ch}',
-            f'energy_0.1_0.3Hz_ch{ch}',
-            f'energy_0.3_1Hz_ch{ch}',
-            f'energy_1_3Hz_ch{ch}',
-            f'median_freq_ch{ch}',
-            f'mean_freq_ch{ch}',
-            f'spectral_edge_90_ch{ch}',
-            f'spectral_edge_95_ch{ch}',
-            f'spectral_entropy_ch{ch}'
-        ])
-        
-        # Envelope features
-        feature_names.extend([
-            f'envelope_upper_mean_ch{ch}',
-            f'envelope_upper_std_ch{ch}',
-            f'envelope_lower_mean_ch{ch}',
-            f'envelope_lower_std_ch{ch}',
-            f'envelope_range_mean_ch{ch}',
-            f'envelope_range_std_ch{ch}',
-            f'envelope_symmetry_ch{ch}',
-            f'area_coefficient_mean_ch{ch}',
-            f'area_coefficient_std_ch{ch}',
-            f'cosine_similarity_mean_ch{ch}',
-            f'cosine_similarity_std_ch{ch}',
-            f'rectangle_index_mean_ch{ch}',
-            f'rectangle_index_std_ch{ch}'
-        ])
-        
-        # Wavelet features
-        for i in range(5):  # 4 levels + approximation
-            feature_names.append(f'wavelet_energy_level{i}_ch{ch}')
-        
-        # Cross-channel features (if not first channel)
-        if ch > 0:
-            feature_names.extend([
-                f'mean_coherence_ch{ch-1}_ch{ch}',
-                f'max_coherence_ch{ch-1}_ch{ch}',
-                f'max_coherence_freq_ch{ch-1}_ch{ch}'
-            ])
-    
-    return feature_names
 
 def main():
     # Load annotations from contractions.csv

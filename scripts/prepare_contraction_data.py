@@ -10,12 +10,14 @@ import sys
 # Import custom modules
 from load_processed import load_processed_data, get_available_records
 from load_contractions import load_contraction_annotations_from_csv, create_contraction_labels
-from extract_features import extract_window_features, get_feature_names
+from extract_features import extract_window_features
 
 def prepare_contraction_dataset(record_name, annotations_dict, 
                               processed_dir="data/processed", 
                               window_size=45, step_size=5,
                               label_threshold=0.5,
+                              first_stage_percentile=70,
+                              second_stage_multiplier=1.2,
                               verbose=False,
                               no_adjust_trim=False):
     """
@@ -99,7 +101,7 @@ def prepare_contraction_dataset(record_name, annotations_dict,
         
         # Extract features
         try:
-            window_features = extract_window_features(window_data, fs=fs)
+            window_features = extract_window_features(window_data, fs=fs, first_stage_percentile=first_stage_percentile, second_stage_multiplier=second_stage_multiplier)
             
             # Get label for this window (majority vote)
             window_label = int(np.mean(labels[start_idx:end_idx]) > label_threshold)
@@ -127,7 +129,9 @@ def prepare_contraction_dataset(record_name, annotations_dict,
             print(f"No valid windows generated for {record_name}")
         return None, None, None
     
-    return np.array(X), np.array(y), window_info
+    feature_names = list(window_features.keys())  
+    
+    return np.array(X), np.array(y), window_info, feature_names
 
 def create_train_test_split(X, y, records, test_size=0.2, random_state=42):
     """
@@ -184,8 +188,11 @@ def create_train_test_split(X, y, records, test_size=0.2, random_state=42):
 def prepare_full_dataset(annotations_dict, 
                        processed_dir="data/processed", 
                        output_dir="data/contraction_data",
+                       label_threshold=0.5,
                        window_size=45, 
                        step_size=5,
+                       first_stage_percentile=70,
+                       second_stage_multiplier=1.2,
                        max_records=None,
                        split=True,
                        test_size=0.2,
@@ -223,7 +230,7 @@ def prepare_full_dataset(annotations_dict,
         Information about the created dataset
     """
     # Get list of available records
-    std_records, _ = get_available_records()
+    std_records, _ = get_available_records(processed_dir=processed_dir)
     
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
@@ -255,11 +262,14 @@ def prepare_full_dataset(annotations_dict,
     
     for record in tqdm(valid_records, desc="Processing records"):
         try:
-            X, y, window_info = prepare_contraction_dataset(
+            X, y, window_info, feature_names = prepare_contraction_dataset(
                 record, 
                 annotations_dict, 
                 processed_dir=processed_dir,
+                label_threshold=label_threshold,
                 window_size=window_size, 
+                first_stage_percentile=first_stage_percentile,
+                second_stage_multiplier=second_stage_multiplier,
                 step_size=step_size,
                 verbose=verbose,
                 no_adjust_trim=no_adjust_trim
@@ -312,11 +322,6 @@ def prepare_full_dataset(annotations_dict,
     X = np.array(all_features)
     y = np.array(all_labels)
     records = np.array(all_record_names)
-    
-    # Get feature names for reference
-    first_signal, _ = load_processed_data(valid_records[0], processed_dir)
-    n_channels = first_signal.shape[1]
-    feature_names = get_feature_names(n_channels)
     
     # Calculate dataset statistics
     dataset_info = {
@@ -461,6 +466,12 @@ def main():
                       help='Window size in seconds')
     parser.add_argument('--step_size', type=int, default=5,
                       help='Step size in seconds')
+    parser.add_argument('--label_threshold', type=float, default=0.5,
+                      help='Label threshold for majority vote')
+    parser.add_argument('--first_stage_percentile', type=int, default=70,
+                      help='First stage percentile for envelope detection')
+    parser.add_argument('--second_stage_multiplier', type=float, default=1.2,
+                      help='Second stage multiplier for envelope detection')
     parser.add_argument('--max_records', type=int, default=None,
                       help='Maximum number of records to process')
     parser.add_argument('--no_split', action='store_true',
@@ -483,9 +494,12 @@ def main():
         annotations_dict,
         processed_dir=args.processed_dir,
         output_dir=args.output_dir,
+        label_threshold=args.label_threshold,
         window_size=args.window_size,
         step_size=args.step_size,
         max_records=args.max_records,
+        first_stage_percentile=args.first_stage_percentile,
+        second_stage_multiplier=args.second_stage_multiplier,
         split=not args.no_split,
         test_size=args.test_size,
         verbose=True,

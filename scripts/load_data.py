@@ -50,8 +50,9 @@ def load_record(record_name, data_dir="../data/records"):
     annotations = None
     try:
         annotations = wfdb.rdann(path, 'atr')
-        print(f"Successfully loaded annotations for {record_name}")
+        # print(f"Successfully loaded annotations for {record_name}")
     except Exception as e:
-        print(f"No annotations found for {record_name}: {e}")
+        # print(f"No annotations found for {record_name}: {e}")
+        pass
 
     return signals, header, annotations
