@@ -6,11 +6,39 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 import argparse
 import sys
+import concurrent.futures
+from functools import partial
 
 # Import custom modules
 from load_processed import load_processed_data, get_available_records
 from load_contractions import load_contraction_annotations_from_csv, create_contraction_labels
 from extract_features import extract_window_features
+
+def _process_window(args):
+    """Helper function for parallel processing of windows."""
+    window_data, fs, first_stage_percentile, second_stage_multiplier, labels, start_idx, end_idx, label_threshold = args
+    try:
+        window_features = extract_window_features(
+            window_data, 
+            fs=fs, 
+            first_stage_percentile=first_stage_percentile,
+            second_stage_multiplier=second_stage_multiplier
+        )
+        
+        window_label = int(np.mean(labels[start_idx:end_idx]) > label_threshold)
+        
+        window_info = {
+            'start_idx': start_idx,
+            'end_idx': end_idx,
+            'start_time': start_idx / fs,
+            'end_time': end_idx / fs,
+            'label': window_label,
+            'contraction_percentage': np.mean(labels[start_idx:end_idx]) * 100
+        }
+        
+        return list(window_features.values()), window_label, window_info, list(window_features.keys())
+    except Exception as e:
+        return None, None, None, None
 
 def prepare_contraction_dataset(record_name, annotations_dict, 
                               processed_dir="data/processed", 
@@ -19,7 +47,8 @@ def prepare_contraction_dataset(record_name, annotations_dict,
                               first_stage_percentile=70,
                               second_stage_multiplier=1.2,
                               verbose=False,
-                              no_adjust_trim=False):
+                              no_adjust_trim=False,
+                              n_workers=None):
     """
     Prepare a dataset for contraction detection using manual annotations from CSV.
     
@@ -41,6 +70,8 @@ def prepare_contraction_dataset(record_name, annotations_dict,
         Whether to print progress information
     no_adjust_trim : bool
         Whether to avoid adjusting times for artifact removal trimming
+    n_workers : int or None
+        Number of worker processes to use (None = use all available cores)
         
     Returns:
     --------
@@ -48,32 +79,29 @@ def prepare_contraction_dataset(record_name, annotations_dict,
         Features array of shape (n_windows, n_features)
     y : np.ndarray
         Labels array of shape (n_windows,)
+    window_info : list
+        List of window information dictionaries
+    feature_names : list
+        List of feature names
     """
     # Load processed data
     signals, processing_info = load_processed_data(record_name, processed_dir=processed_dir)
     if signals is None:
         if verbose:
             print(f"Could not load processed data for record {record_name}")
-        return None, None, None
+        return None, None, None, None
     
-    # Create labels from annotations, adjusting for trim_seconds if needed
-    fs = processing_info['processed_fs']  # Should be 20 Hz
-    
+    # Create labels from annotations
+    fs = processing_info['processed_fs']
     if no_adjust_trim:
-        # Don't adjust for trim_seconds
         labels = create_contraction_labels(record_name, len(signals), fs, annotations_dict, None)
     else:
-        # Adjust for trim_seconds
         labels = create_contraction_labels(record_name, len(signals), fs, annotations_dict, processing_info)
     
     if np.sum(labels) == 0:
         if verbose:
             print(f"No contractions found for record {record_name}")
-        if record_name in annotations_dict and len(annotations_dict[record_name]) > 0:
-            visible_contractions = np.sum(np.diff(np.concatenate(([0], labels, [0]))) > 0)
-            if verbose:
-                print(f"  Warning: Original record has {len(annotations_dict[record_name])} contractions, but {visible_contractions} are visible in processed data")
-                print(f"  This may be due to contractions occurring in trimmed regions")
+        return None, None, None, None
     
     # Calculate window parameters
     samples_per_window = int(window_size * fs)
@@ -82,54 +110,37 @@ def prepare_contraction_dataset(record_name, annotations_dict,
     
     if verbose:
         print(f"Processing record {record_name} with {n_windows} windows")
-        print(f"Signal shape: {signals.shape}, Sampling rate: {fs} Hz")
-        print(f"Window size: {window_size}s ({samples_per_window} samples)")
-        print(f"Step size: {step_size}s ({step_samples} samples)")
     
-    # Initialize lists for sequence data
-    X = []  # Features
-    y = []  # Labels
-    window_info = []  # Store window information for debugging
-    
-    # Extract features for each window
+    # Prepare arguments for parallel processing
+    window_args = []
     for i in range(n_windows):
         start_idx = i * step_samples
         end_idx = start_idx + samples_per_window
-        
-        # Extract window data
         window_data = signals[start_idx:end_idx]
-        
-        # Extract features
-        try:
-            window_features = extract_window_features(window_data, fs=fs, first_stage_percentile=first_stage_percentile, second_stage_multiplier=second_stage_multiplier)
-            
-            # Get label for this window (majority vote)
-            window_label = int(np.mean(labels[start_idx:end_idx]) > label_threshold)
-            
-            X.append(list(window_features.values()))
-            y.append(window_label)
-            
-            # Store window information
-            window_info.append({
-                'start_idx': start_idx,
-                'end_idx': end_idx,
-                'start_time': start_idx / fs,
-                'end_time': end_idx / fs,
-                'label': window_label,
-                'contraction_percentage': np.mean(labels[start_idx:end_idx]) * 100
-            })
-            
-        except Exception as e:
-            if verbose:
-                print(f"Error processing window {i} for {record_name}: {e}")
-            continue
+        window_args.append((
+            window_data, fs, first_stage_percentile, second_stage_multiplier,
+            labels, start_idx, end_idx, label_threshold
+        ))
+    
+    # Process windows sequentially (parallelization moved to higher level)
+    X = []
+    y = []
+    window_info = []
+    feature_names = None
+    
+    for args in window_args:
+        features, label, info, keys = _process_window(args)
+        if features is not None:
+            X.append(features)
+            y.append(label)
+            window_info.append(info)
+            if feature_names is None:
+                feature_names = keys
     
     if not X:
         if verbose:
             print(f"No valid windows generated for {record_name}")
-        return None, None, None
-    
-    feature_names = list(window_features.keys())  
+        return None, None, None, None
     
     return np.array(X), np.array(y), window_info, feature_names
 
@@ -185,6 +196,60 @@ def create_train_test_split(X, y, records, test_size=0.2, random_state=42):
     
     return X_train, X_test, y_train, y_test, train_records, test_records
 
+def process_record(record, annotations_dict, processed_dir, label_threshold, window_size, 
+                  first_stage_percentile, second_stage_multiplier, step_size, no_adjust_trim, n_workers):
+    """Process a single record in parallel."""
+    try:
+        X, y, window_info, feature_names = prepare_contraction_dataset(
+            record, 
+            annotations_dict, 
+            processed_dir=processed_dir,
+            label_threshold=label_threshold,
+            window_size=window_size, 
+            first_stage_percentile=first_stage_percentile,
+            second_stage_multiplier=second_stage_multiplier,
+            step_size=step_size,
+            verbose=False,  # Disable verbose for individual records
+            no_adjust_trim=no_adjust_trim,
+            n_workers=n_workers
+        )
+        
+        if X is None or y is None:
+            return None
+            
+        # Count original vs visible contractions
+        original_contractions = len(annotations_dict.get(record, []))
+        
+        # Load data again to compute visible contractions
+        signals, processing_info = load_processed_data(record, processed_dir=processed_dir)
+        fs = processing_info['processed_fs']
+        labels = create_contraction_labels(record, len(signals), fs, annotations_dict, 
+                                         None if no_adjust_trim else processing_info)
+        visible_contractions = np.sum(np.diff(np.concatenate(([0], labels, [0]))) > 0)
+            
+        record_stats = {
+            'windows': len(y),
+            'positive_windows': int(np.sum(y)),
+            'positive_percentage': (np.sum(y) / len(y)) * 100,
+            'original_contractions': original_contractions,
+            'visible_contractions': visible_contractions,
+            'window_info': window_info
+        }
+        
+        return {
+            'record': record,
+            'feature_names': feature_names,
+            'X': X,
+            'y': y,
+            'record_stats': record_stats,
+            'original_contractions': original_contractions,
+            'visible_contractions': visible_contractions
+        }
+            
+    except Exception as e:
+        print(f"Error processing record {record}: {e}")
+        return None
+
 def prepare_full_dataset(annotations_dict, 
                        processed_dir="data/processed", 
                        output_dir="data/contraction_data",
@@ -197,7 +262,8 @@ def prepare_full_dataset(annotations_dict,
                        split=True,
                        test_size=0.2,
                        verbose=True,
-                       no_adjust_trim=False):
+                       no_adjust_trim=False,
+                       n_workers=None):
     """
     Prepare a complete dataset for contraction detection using all available records.
     
@@ -223,6 +289,8 @@ def prepare_full_dataset(annotations_dict,
         Whether to print progress information
     no_adjust_trim : bool
         Whether to avoid adjusting times for artifact removal trimming
+    n_workers : int or None
+        Number of worker processes to use (None = use all available cores)
         
     Returns:
     --------
@@ -250,7 +318,7 @@ def prepare_full_dataset(annotations_dict,
         if verbose:
             print(f"Limited to {max_records} records")
     
-    # Process each record
+    # Process each record in parallel
     all_features = []
     all_labels = []
     all_record_names = []
@@ -260,58 +328,52 @@ def prepare_full_dataset(annotations_dict,
     total_original_contractions = 0
     total_visible_contractions = 0
     
-    for record in tqdm(valid_records, desc="Processing records"):
-        try:
-            X, y, window_info, feature_names = prepare_contraction_dataset(
-                record, 
-                annotations_dict, 
-                processed_dir=processed_dir,
-                label_threshold=label_threshold,
-                window_size=window_size, 
-                first_stage_percentile=first_stage_percentile,
-                second_stage_multiplier=second_stage_multiplier,
-                step_size=step_size,
-                verbose=verbose,
-                no_adjust_trim=no_adjust_trim
-            )
-            
-            if X is None or y is None:
-                continue
-                
-            # Count original vs visible contractions
-            original_contractions = len(annotations_dict.get(record, []))
-            total_original_contractions += original_contractions
-            
-            # Load data again to compute visible contractions
-            signals, processing_info = load_processed_data(record, processed_dir=processed_dir)
-            fs = processing_info['processed_fs']
-            labels = create_contraction_labels(record, len(signals), fs, annotations_dict, 
-                                             None if no_adjust_trim else processing_info)
-            visible_contractions = np.sum(np.diff(np.concatenate(([0], labels, [0]))) > 0)
-            total_visible_contractions += visible_contractions
-                
-            record_stats[record] = {
-                'windows': len(y),
-                'positive_windows': int(np.sum(y)),
-                'positive_percentage': (np.sum(y) / len(y)) * 100,
-                'original_contractions': original_contractions,
-                'visible_contractions': visible_contractions,
-                'window_info': window_info
-            }
+    # Create partial function with fixed parameters
+    process_record_partial = partial(
+        process_record,
+        annotations_dict=annotations_dict,
+        processed_dir=processed_dir,
+        label_threshold=label_threshold,
+        window_size=window_size,
+        first_stage_percentile=first_stage_percentile,
+        second_stage_multiplier=second_stage_multiplier,
+        step_size=step_size,
+        no_adjust_trim=no_adjust_trim,
+        n_workers=None  # No nested parallelization
+    )
+    
+    # Process records in parallel
+    with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as executor:
+        if verbose:
+            results = list(tqdm(
+                executor.map(process_record_partial, valid_records),
+                total=len(valid_records),
+                desc="Processing records"
+            ))
+        else:
+            results = list(executor.map(process_record_partial, valid_records))
+    
+    # Collect results
+    for result in results:
+        if result is not None:
+            record = result['record']
+            X = result['X']
+            y = result['y']
             
             # Add to dataset
             for i in range(len(y)):
                 all_features.append(X[i])
                 all_labels.append(y[i])
                 all_record_names.append(record)
-                
+            
+            # Update stats
+            record_stats[record] = result['record_stats']
+            total_original_contractions += result['original_contractions']
+            total_visible_contractions += result['visible_contractions']
+            
             if verbose:
                 print(f"Added {len(y)} windows from {record} with {np.sum(y)} positive examples ({np.sum(y)/len(y)*100:.2f}%)")
-                print(f"Original contractions: {original_contractions}, Visible in processed data: {visible_contractions}")
-                
-        except Exception as e:
-            print(f"Error processing record {record}: {e}")
-            continue
+                print(f"Original contractions: {result['original_contractions']}, Visible in processed data: {result['visible_contractions']}")
     
     # Check if we have any data
     if not all_features:
@@ -322,6 +384,7 @@ def prepare_full_dataset(annotations_dict,
     X = np.array(all_features)
     y = np.array(all_labels)
     records = np.array(all_record_names)
+    feature_names = result['feature_names']
     
     # Calculate dataset statistics
     dataset_info = {
@@ -482,6 +545,8 @@ def main():
                       help='Create visualizations of the dataset')
     parser.add_argument('--no_adjust_trim', action='store_true',
                       help='Do not adjust contraction times for trimmed seconds')
+    parser.add_argument('--n_workers', type=int, default=4,
+                      help='Number of worker processes to use')
     
     args = parser.parse_args()
     
@@ -503,7 +568,8 @@ def main():
         split=not args.no_split,
         test_size=args.test_size,
         verbose=True,
-        no_adjust_trim=args.no_adjust_trim
+        no_adjust_trim=args.no_adjust_trim,
+        n_workers=args.n_workers
     )
     
     # Create visualizations if requested

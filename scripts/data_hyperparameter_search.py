@@ -123,8 +123,8 @@ def run_hyperparameter_search(annotations_dict, n_trials=50, n_records=20, verbo
             
             if processed_signals is None:
                 print(f"Failed to process record {record}")
-                continue
-
+            continue
+        
 
         if verbose:
             print(f"Processed {len(sampled_records)} records")
@@ -149,7 +149,7 @@ def run_hyperparameter_search(annotations_dict, n_trials=50, n_records=20, verbo
 
         if verbose:
             print(f"Generated {len(X)} features")
-
+        
         # Split data
         X_train, X_val, y_train, y_val = train_test_split(
             X, y, test_size=0.2, random_state=42, stratify=y
