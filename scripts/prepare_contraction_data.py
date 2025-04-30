@@ -254,16 +254,16 @@ def prepare_full_dataset(annotations_dict,
                        processed_dir="data/processed", 
                        output_dir="data/contraction_data",
                        label_threshold=0.5,
-                       window_size=45, 
-                       step_size=5,
-                       first_stage_percentile=70,
-                       second_stage_multiplier=1.2,
+                       window_size=60, 
+                       step_size=3,
+                       first_stage_percentile=75,
+                       second_stage_multiplier=1.25,
                        max_records=None,
                        split=True,
                        test_size=0.2,
                        verbose=True,
                        no_adjust_trim=False,
-                       n_workers=None):
+                       n_workers=8):
     """
     Prepare a complete dataset for contraction detection using all available records.
     
@@ -525,15 +525,15 @@ def main():
                       help='Directory containing processed signals')
     parser.add_argument('--output_dir', type=str, default='data/contraction_data',
                       help='Directory to save the dataset')
-    parser.add_argument('--window_size', type=int, default=45,
+    parser.add_argument('--window_size', type=int, default=60,
                       help='Window size in seconds')
-    parser.add_argument('--step_size', type=int, default=5,
+    parser.add_argument('--step_size', type=int, default=3,
                       help='Step size in seconds')
-    parser.add_argument('--label_threshold', type=float, default=0.5,
+    parser.add_argument('--label_threshold', type=float, default=0.6,
                       help='Label threshold for majority vote')
-    parser.add_argument('--first_stage_percentile', type=int, default=70,
+    parser.add_argument('--first_stage_percentile', type=int, default=75,
                       help='First stage percentile for envelope detection')
-    parser.add_argument('--second_stage_multiplier', type=float, default=1.2,
+    parser.add_argument('--second_stage_multiplier', type=float, default=1.25,
                       help='Second stage multiplier for envelope detection')
     parser.add_argument('--max_records', type=int, default=None,
                       help='Maximum number of records to process')
@@ -545,7 +545,7 @@ def main():
                       help='Create visualizations of the dataset')
     parser.add_argument('--no_adjust_trim', action='store_true',
                       help='Do not adjust contraction times for trimmed seconds')
-    parser.add_argument('--n_workers', type=int, default=4,
+    parser.add_argument('--n_workers', type=int, default=8,
                       help='Number of worker processes to use')
     
     args = parser.parse_args()

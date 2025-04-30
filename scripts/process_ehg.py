@@ -49,7 +49,7 @@ def load_record(record_name, data_dir="../data"):
     print(f"Could not load record {record_name} from any path. Please check the file exists.")
     return None, None, None
 
-def preprocess_signals(signals, fs=200, lowcut=0.1, highcut=4.0, notch_freq=50.0, q=30):
+def preprocess_signals(signals, fs=200, lowcut=0.3, highcut=5.0, notch_freq=50.0, q=30):
     """
     Preprocess EHG signals with bandpass and notch filtering.
     """
@@ -76,7 +76,7 @@ def preprocess_signals(signals, fs=200, lowcut=0.1, highcut=4.0, notch_freq=50.0
     
     return downsampled_signals
 
-def extract_features(signal_data, fs=20, window_size=10):
+def extract_features(signal_data, fs=20, window_size=60):
     """
     Extract features from EHG signal.
     """

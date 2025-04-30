@@ -65,7 +65,7 @@ def eval(model, X_test, y_test, feature_names):
     
     return metrics
 
-def run_hyperparameter_search(annotations_dict, n_trials=50, n_records=20, verbose=True):
+def run_hyperparameter_search(annotations_dict, n_trials=36, n_records=20, verbose=True):
     """
     Run hyperparameter search with random sampling.
     
@@ -85,7 +85,7 @@ def run_hyperparameter_search(annotations_dict, n_trials=50, n_records=20, verbo
     # Initialize results storage
     results = []
     
-    for trial in tqdm(range(n_trials), desc="Running hyperparameter search"):
+    for trial in tqdm(range(14, 14+n_trials), desc="Running hyperparameter search"):
         # Randomly sample parameters from the grid
         params = {k: random.choice(v) for k, v in param_grid.items()}
         
@@ -253,7 +253,7 @@ def main():
                       help='Directory containing processed signals')
     parser.add_argument('--n_trials', type=int, default=50,
                       help='Number of trials to run')
-    parser.add_argument('--n_records', type=int, default=20,
+    parser.add_argument('--n_records', type=int, default=15,
                       help='Maximum number of records to sample')
     parser.add_argument('--verbose', type=bool, default=True,
                       help='Verbose output')

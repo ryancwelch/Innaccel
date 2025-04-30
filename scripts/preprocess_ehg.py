@@ -27,7 +27,7 @@ def safe_copy(data):
     return result
 
 def preprocess_record(record_name, data_dir="data/records", output_dir="data/processed",
-                     lowcut=0.1, highcut=4.0, target_fs=20, trim_seconds=60, 
+                     lowcut=0.3, highcut=5.0, target_fs=100, trim_seconds=60, 
                      skip_artifact_removal=False, save_intermediate=False, verbose=True):
     """
     Preprocesses a single EHG record through configurable steps:
@@ -375,9 +375,9 @@ def main():
                         help='Directory to save processed data')
     
     # Processing parameter options
-    parser.add_argument('--lowcut', type=float, default=0.1, 
+    parser.add_argument('--lowcut', type=float, default=0.3, 
                         help='Lower cutoff frequency for bandpass filter (Hz)')
-    parser.add_argument('--highcut', type=float, default=4.0, 
+    parser.add_argument('--highcut', type=float, default=5.0, 
                         help='Upper cutoff frequency for bandpass filter (Hz)')
     parser.add_argument('--target_fs', type=int, default=20, 
                         help='Target sampling frequency after downsampling (Hz)')
