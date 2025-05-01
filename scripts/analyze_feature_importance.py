@@ -12,6 +12,10 @@ import joblib
 import argparse
 from train_contraction_model import load_dataset, train_with_hyperparameter_tuning, evaluate_model
 
+# Set the style and font
+sns.set(context="talk")
+plt.rcParams['font.family'] = 'Arial'
+
 def load_feature_names(trial_dir):
     feature_names_path = os.path.join(trial_dir, 'contraction_data', 'feature_names.npy')
     if os.path.exists(feature_names_path):
@@ -283,56 +287,49 @@ def plot_cumulative_importance(selected_features_data, output_file):
 def train_and_compare_models(output_dir):
     """
     Train and compare models using all features vs selected features.
-    First trains models to get feature importances,
+    First loads existing model to get feature importances,
     then uses those to select features for second models.
     """
     # Load the dataset
     X_train, X_test, y_train, y_test, feature_names, _ = load_dataset(data_dir="data/final_contraction_data")
     
-    # Train initial models to get feature importances
-    print("\nTraining initial models to get feature importances...")
+    # Load existing Random Forest model
+    print("\nLoading existing Random Forest model...")
+    model_path = os.path.join(output_dir, 'final_random_forest_model.joblib')
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model file not found at {model_path}. Please ensure the model exists.")
     
-    # Random Forest
-    print("\nTraining Random Forest model...")
-    rf_model = train_with_hyperparameter_tuning(X_train, y_train, model_type='random_forest')
+    rf_model = joblib.load(model_path)
     rf_metrics = evaluate_model(rf_model, X_test, y_test, feature_names)
     rf_importances = rf_model.feature_importances_
+    print(f"\nLoaded Random Forest model from {model_path}")
     
-    # Save the final Random Forest model
-    os.makedirs(output_dir, exist_ok=True)
-    model_path = os.path.join(output_dir, 'final_random_forest_model.joblib')
-    joblib.dump(rf_model, model_path)
-    print(f"\nSaved final Random Forest model to {model_path}")
+    # Get feature indices for random forest - select top 50 features
+    rf_indices = np.argsort(rf_importances)[::-1][:50]
+    rf_selected_features = [feature_names[i] for i in rf_indices]
     
-    # Get feature indices for random forest
-    rf_indices = np.argsort(rf_importances)[::-1]
+    # Save selected features to JSON
+    selected_features_path = os.path.join(output_dir, 'top50_selected_features.json')
+    with open(selected_features_path, 'w') as f:
+        json.dump({
+            'selected_features': rf_selected_features,
+            'feature_importances': {name: float(rf_importances[i]) for i, name in zip(rf_indices, rf_selected_features)}
+        }, f, indent=4)
+    print(f"\nSaved top 50 selected features to {selected_features_path}")
     
-    # Calculate cumulative importance
-    rf_total = sum(rf_importances)
-    rf_cumulative = 0
-    rf_selected_indices = []
-    
-    for idx in rf_indices:
-        rf_cumulative += rf_importances[idx]
-        rf_selected_indices.append(idx)
-        if rf_cumulative / rf_total >= 0.95:
-            break
-            
-    rf_selected_features = [feature_names[i] for i in rf_selected_indices]
-    
-    print(f"\nSelected {len(rf_selected_indices)} features based on random forest importance")
+    print(f"\nSelected {len(rf_indices)} features based on random forest importance")
     
     # Train model with selected features
     print("\nTraining model with selected features...")
     
     # Random Forest with selected features
-    X_train_rf = X_train[:, rf_selected_indices]
-    X_test_rf = X_test[:, rf_selected_indices]
+    X_train_rf = X_train[:, rf_indices]
+    X_test_rf = X_test[:, rf_indices]
     rf_selected_model = train_with_hyperparameter_tuning(X_train_rf, y_train, model_type='random_forest')
     rf_selected_metrics = evaluate_model(rf_selected_model, X_test_rf, y_test, rf_selected_features)
     
     # Save the selected features model
-    selected_model_path = os.path.join(output_dir, 'selected_features_random_forest_model.joblib')
+    selected_model_path = os.path.join(output_dir, 'top50_selected_features_random_forest_model.joblib')
     joblib.dump(rf_selected_model, selected_model_path)
     print(f"\nSaved selected features Random Forest model to {selected_model_path}")
     
@@ -349,12 +346,18 @@ def train_and_compare_models(output_dir):
             },
             'num_features': {
                 'full': X_train.shape[1],
-                'selected': len(rf_selected_indices)
+                'selected': len(rf_indices)
             },
             'selected_features': rf_selected_features,
             'feature_importances': {name: float(imp) for name, imp in zip(feature_names, rf_importances)}
         }
     }
+    
+    # Save comparison results to JSON
+    comparison_path = os.path.join(output_dir, 'top50_selected.json')
+    with open(comparison_path, 'w') as f:
+        json.dump(comparison, f, indent=4)
+    print(f"\nSaved comparison results to {comparison_path}")
     
     # Plot comparisons
     plt.figure(figsize=(10, 6))
@@ -393,6 +396,171 @@ def train_and_compare_models(output_dir):
     
     return comparison, rf_importances
 
+def visualize_selected_features(top50_path: str = "analysis_results/top50_selected_features.json",
+                              output_dir: str = "analysis_results/figures"):
+    """Visualize feature importance from top50_selected_features.json."""
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Load top 50 features
+    with open(top50_path, 'r') as f:
+        top50_data = json.load(f)
+        top50_features = top50_data['selected_features']
+        feature_importances = top50_data['feature_importances']
+    
+    # Create DataFrame for top 50 features
+    top50_df = pd.DataFrame({'Feature': top50_features})
+    top50_df['Importance'] = top50_df['Feature'].map(feature_importances)
+    
+    # Function to extract channel information
+    def extract_channel(feature):
+        if 'ch' in feature:
+            channel = feature[feature.find('ch'):].split('_')[0]
+            return channel
+        return None
+    
+    # Function to extract base feature name (without channel info)
+    def extract_base_feature(feature):
+        if 'ch' in feature:
+            # Remove the channel part and any trailing underscores
+            base = feature[:feature.find('ch')].rstrip('_')
+            return base
+        return feature
+    
+    # Function to extract feature type based on actual feature extraction process
+    def extract_feature_type(feature):
+        # Propagation features (cross-channel dynamics)
+        if any(term in feature.lower() for term in ['velocity', 'lag', 'max_corr']):
+            return 'Propagation'
+        
+        # Envelope features
+        if any(term in feature.lower() for term in ['envelope_upper', 'envelope_lower', 'envelope_range', 'envelope_symmetry']):
+            return 'Envelope'
+        
+        # Area-based features
+        if any(term in feature.lower() for term in ['area_coefficient', 'cosine_similarity', 'rectangle_index']):
+            return 'Area-Based'
+        
+        # Basic time domain features
+        if any(term in feature.lower() for term in ['mean', 'std', 'rms', 'kurtosis', 'skewness', 'max_amp', 'peak_to_peak']):
+            return 'Time-Domain'
+        
+        # Frequency domain features
+        if any(term in feature.lower() for term in ['peak_freq', 'peak_power', 'energy_', 'median_freq', 'mean_freq', 'spectral_edge']):
+            return 'Frequency'
+        
+        # Spectral entropy
+        if 'spectral_entropy' in feature.lower():
+            return 'Spectral Entropy'
+        
+        # Wavelet features
+        if 'wavelet_energy' in feature.lower():
+            return 'Wavelet'
+        
+        # Coherence features (cross-channel frequency coupling)
+        if any(term in feature.lower() for term in ['coherence', 'max_coherence_freq']):
+            return 'Coherence'
+        
+        return 'Other'
+    
+    # Add channel, base feature, and feature type columns
+    top50_df['Channel'] = top50_df['Feature'].apply(extract_channel)
+    top50_df['BaseFeature'] = top50_df['Feature'].apply(extract_base_feature)
+    top50_df['Type'] = top50_df['Feature'].apply(extract_feature_type)
+    
+    def create_plots(df, category_col, title_prefix, output_prefix):
+        """Create two types of plots for a given category column."""
+        # 1. Normalized histogram
+        plt.figure(figsize=(12, 8))
+        counts = df[category_col].value_counts(normalize=True) * 100
+        ax = sns.barplot(x=counts.index, y=counts.values, palette='viridis')
+        if category_col == 'BaseFeature':
+            plt.title('Distribution of Top 50 Features (Ignoring Channel)', fontsize=16, pad=20)
+            plt.xlabel('Feature', fontsize=14)
+        elif category_col == 'Type':
+            plt.title('Distribution of Top 50 Features by Feature Category', fontsize=16, pad=20)
+            plt.xlabel('Feature Category', fontsize=14)
+        elif category_col == 'Feature':
+            plt.title('Distribution of Top 50 Features (Including Channel)', fontsize=16, pad=20)
+            plt.xlabel('Feature', fontsize=14)
+        else:
+            plt.title(f'Distribution of Top 50 Features by {title_prefix}', fontsize=16, pad=20)
+            plt.xlabel(title_prefix, fontsize=14)
+        plt.ylabel('Feature Count (%)', fontsize=14)
+        
+        # Adjust x-axis label alignment
+        plt.xticks(rotation=45, ha='right')
+        # Adjust bar width and alignment
+        for bar in ax.patches:
+            bar.set_width(0.8)  # Set bar width
+            bar.set_x(bar.get_x() + 0.1)  # Adjust bar position
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, f'{output_prefix}_distribution.png'), dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # 2. Total importance (normalized)
+        plt.figure(figsize=(12, 8))
+        importance = df.groupby(category_col)['Importance'].sum().sort_values(ascending=False)
+        importance = (importance / importance.sum()) * 100
+        ax = sns.barplot(x=importance.index, y=importance.values, palette='viridis')
+        if category_col == 'BaseFeature':
+            plt.title('Importance of Top 50 Features (Ignoring Channel)', fontsize=16, pad=20)
+            plt.xlabel('Feature', fontsize=14)
+        elif category_col == 'Type':
+            plt.title('Importance of Top 50 Features by Feature Category', fontsize=16, pad=20)
+            plt.xlabel('Feature Category', fontsize=14)
+        elif category_col == 'Feature':
+            plt.title('Importance of Top 50 Features (Including Channel)', fontsize=16, pad=20)
+            plt.xlabel('Feature', fontsize=14)
+        else:
+            plt.title(f'Importance of Top 50 Features by {title_prefix}', fontsize=16, pad=20)
+            plt.xlabel(title_prefix, fontsize=14)
+        plt.ylabel('Importance (%)', fontsize=14)
+        
+        # Adjust x-axis label alignment
+        plt.xticks(rotation=45, ha='right')
+        # Adjust bar width and alignment
+        for bar in ax.patches:
+            bar.set_width(0.8)  # Set bar width
+            bar.set_x(bar.get_x() + 0.1)  # Adjust bar position
+        
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, f'{output_prefix}_total_importance.png'), dpi=300, bbox_inches='tight')
+        plt.close()
+    
+    # Create plots for each category type
+    create_plots(top50_df, 'Channel', 'Channel', 'channel')
+    create_plots(top50_df, 'Type', 'Feature Type', 'feature_type')
+    create_plots(top50_df, 'BaseFeature', 'Feature Type (Ignoring Channel)', 'base_feature')
+    create_plots(top50_df, 'Feature', 'Feature Type (Including Channel)', 'full_feature')
+    
+    # Print summary statistics
+    print("\nTop 50 Features Summary:")
+    print(f"Total number of features: {len(top50_features)}")
+    
+    # Print statistics for each category type
+    categories = {
+        'Channel': 'Channel Distribution',
+        'Type': 'Feature Type Distribution',
+        'BaseFeature': 'Feature Type Distribution (Ignoring Channel)',
+        'Feature': 'Feature Type Distribution (Including Channel)'
+    }
+    
+    for col, title in categories.items():
+        print(f"\n{title}:")
+        # Distribution
+        counts = top50_df[col].value_counts(normalize=True) * 100
+        print("\nDistribution (%):")
+        for name, count in counts.items():
+            print(f"{name}: {count:.1f}%")
+        
+        # Total importance
+        importance = top50_df.groupby(col)['Importance'].sum()
+        importance = (importance / importance.sum()) * 100
+        print("\nTotal Importance in Top 50 (%):")
+        for name, imp in importance.items():
+            print(f"{name}: {imp:.1f}%")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Analyze feature importance from trial data')
     parser.add_argument('--hyperparameter-only', action='store_true',
@@ -401,55 +569,60 @@ if __name__ == "__main__":
                       help='Threshold for cumulative feature importance (default: 0.95)')
     parser.add_argument('--compare-models', action='store_true',
                       help='Train and compare models using selected features')
+    parser.add_argument('--visualize', action='store_true',
+                      help='Visualize results from selected_features.json')
     args = parser.parse_args()
 
     # Create analysis_results directory if it doesn't exist
     output_dir = 'analysis_results'
     os.makedirs(output_dir, exist_ok=True)
 
-    results = {}
-    
-    # First train the models to get their feature importances
-    if args.compare_models:
-        print("\nTraining models to get feature importances...")
-        comparison, rf_importances = train_and_compare_models(output_dir)
-        results['model_comparison'] = comparison
+    if args.visualize:
+        visualize_selected_features()
+    else:
+        results = {}
         
-        # Print results
-        print(f"\nRandom Forest Model Comparison Results:")
-        print(f"Full model (all features):")
-        print(f"  F1 Score: {comparison['random_forest']['full_model']['f1']:.3f}")
-        print(f"  AUC: {comparison['random_forest']['full_model']['auc']:.3f}")
-        print(f"Selected features model:")
-        print(f"  F1 Score: {comparison['random_forest']['selected_model']['f1']:.3f}")
-        print(f"  AUC: {comparison['random_forest']['selected_model']['auc']:.3f}")
-        print(f"Number of features reduced from {comparison['random_forest']['num_features']['full']} to {comparison['random_forest']['num_features']['selected']}")
-        print("\nSelected features:")
-        for feature in comparison['random_forest']['selected_features']:
-            print(f"  - {feature}")
+        # First train the models to get their feature importances
+        if args.compare_models:
+            print("\nTraining models to get feature importances...")
+            comparison, rf_importances = train_and_compare_models(output_dir)
+            results['model_comparison'] = comparison
+            
+            # Print results
+            print(f"\nRandom Forest Model Comparison Results:")
+            print(f"Full model (all features):")
+            print(f"  F1 Score: {comparison['random_forest']['full_model']['f1']:.3f}")
+            print(f"  AUC: {comparison['random_forest']['full_model']['auc']:.3f}")
+            print(f"Selected features model:")
+            print(f"  F1 Score: {comparison['random_forest']['selected_model']['f1']:.3f}")
+            print(f"  AUC: {comparison['random_forest']['selected_model']['auc']:.3f}")
+            print(f"Number of features reduced from {comparison['random_forest']['num_features']['full']} to {comparison['random_forest']['num_features']['selected']}")
+            print("\nSelected features:")
+            for feature in comparison['random_forest']['selected_features']:
+                print(f"  - {feature}")
 
-    trial_importance = agg_trial_feature_importances()
-    results['trial_importance'] = trial_importance
-    plot_feature_importance(trial_importance,
-                          'Random Forest Feature Importance',
-                          os.path.join(output_dir, 'rf.png'))
+        trial_importance = agg_trial_feature_importances()
+        results['trial_importance'] = trial_importance
+        plot_feature_importance(trial_importance,
+                              'Random Forest Feature Importance',
+                              os.path.join(output_dir, 'rf.png'))
 
-    if args.compare_models:
-        # Compute combined feature importance including both models
-        combined_importance = compute_combined_feature_importance(
-            trial_importance,
-            rf_importances,
-            comparison['random_forest']['selected_features']
-        )
-        results['combined_importance'] = combined_importance
-        plot_combined_importance(combined_importance, os.path.join(output_dir, 'combined.png'))
-        
-        # Select important features for combined importance
-        selected_combined = select_important_features(combined_importance, args.importance_threshold)
-        results['selected_combined_features'] = selected_combined
-        plot_cumulative_importance(selected_combined, 
-                                 os.path.join(output_dir, 'combined_cumulative.png'))
+        if args.compare_models:
+            # Compute combined feature importance including both models
+            combined_importance = compute_combined_feature_importance(
+                trial_importance,
+                rf_importances,
+                comparison['random_forest']['selected_features']
+            )
+            results['combined_importance'] = combined_importance
+            plot_combined_importance(combined_importance, os.path.join(output_dir, 'combined.png'))
+            
+            # Select important features for combined importance
+            selected_combined = select_important_features(combined_importance, args.importance_threshold)
+            results['selected_combined_features'] = selected_combined
+            plot_cumulative_importance(selected_combined, 
+                                     os.path.join(output_dir, 'combined_cumulative.png'))
 
-    # Save results to JSON
-    with open(os.path.join(output_dir, 'results.json'), 'w') as f:
-        json.dump(results, f, indent=4)
+        # Save results to JSON
+        with open(os.path.join(output_dir, 'results.json'), 'w') as f:
+            json.dump(results, f, indent=4)

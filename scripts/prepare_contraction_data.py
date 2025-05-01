@@ -8,6 +8,9 @@ import argparse
 import sys
 import concurrent.futures
 from functools import partial
+from sklearn.model_selection import train_test_split
+import pickle
+import json
 
 # Import custom modules
 from load_processed import load_processed_data, get_available_records
@@ -321,7 +324,6 @@ def prepare_full_dataset(annotations_dict,
     # Process each record in parallel
     all_features = []
     all_labels = []
-    all_record_names = []
     record_stats = {}
     
     # Track annotation stats
@@ -353,18 +355,34 @@ def prepare_full_dataset(annotations_dict,
         else:
             results = list(executor.map(process_record_partial, valid_records))
     
-    # Collect results
+    # Collect results and find maximum number of windows per record
+    max_windows = 0
     for result in results:
         if result is not None:
-            record = result['record']
             X = result['X']
-            y = result['y']
+            if X is not None and len(X) > max_windows:
+                max_windows = len(X)
+    
+    # Initialize arrays with NaN padding for records with fewer windows
+    n_records = len(valid_records)
+    n_features = len(results[0]['feature_names']) if results and results[0] is not None else 0
+    
+    X = np.full((n_records, max_windows, n_features), np.nan)
+    y = np.full((n_records, max_windows), np.nan)
+    window_info = [[] for _ in range(n_records)]
+    
+    # Fill arrays with data
+    for i, result in enumerate(results):
+        if result is not None:
+            record = result['record']
+            X_record = result['X']
+            y_record = result['y']
+            info_record = result['record_stats']['window_info']
             
             # Add to dataset
-            for i in range(len(y)):
-                all_features.append(X[i])
-                all_labels.append(y[i])
-                all_record_names.append(record)
+            X[i, :len(X_record)] = X_record
+            y[i, :len(y_record)] = y_record
+            window_info[i] = info_record
             
             # Update stats
             record_stats[record] = result['record_stats']
@@ -372,29 +390,25 @@ def prepare_full_dataset(annotations_dict,
             total_visible_contractions += result['visible_contractions']
             
             if verbose:
-                print(f"Added {len(y)} windows from {record} with {np.sum(y)} positive examples ({np.sum(y)/len(y)*100:.2f}%)")
+                print(f"Added {len(y_record)} windows from {record} with {np.sum(y_record)} positive examples ({np.sum(y_record)/len(y_record)*100:.2f}%)")
                 print(f"Original contractions: {result['original_contractions']}, Visible in processed data: {result['visible_contractions']}")
     
     # Check if we have any data
-    if not all_features:
+    if np.all(np.isnan(X)):
         print("No valid data generated! Check annotations and processed data.")
         return None
     
-    # Convert to numpy arrays
-    X = np.array(all_features)
-    y = np.array(all_labels)
-    records = np.array(all_record_names)
-    feature_names = result['feature_names']
+    feature_names = results[0]['feature_names'] if results and results[0] is not None else []
     
     # Calculate dataset statistics
     dataset_info = {
-        'n_samples': len(y),
-        'n_features': X.shape[1],
-        'n_positive': int(np.sum(y)),
-        'positive_percentage': np.sum(y) / len(y) * 100,
+        'n_records': n_records,
+        'max_windows': max_windows,
+        'n_features': n_features,
+        'n_positive': int(np.nansum(y)),
+        'positive_percentage': np.nansum(y) / np.sum(~np.isnan(y)) * 100,
         'window_size': window_size,
         'step_size': step_size,
-        'n_records': len(valid_records),
         'record_names': valid_records,
         'feature_names': feature_names,
         'record_stats': record_stats,
@@ -406,25 +420,37 @@ def prepare_full_dataset(annotations_dict,
     # Save the dataset
     np.save(os.path.join(output_dir, 'X.npy'), X)
     np.save(os.path.join(output_dir, 'y.npy'), y)
-    np.save(os.path.join(output_dir, 'records.npy'), records)
+    with open(os.path.join(output_dir, 'window_info.json'), 'w') as f:
+        json.dump(window_info, f, indent=2)
     np.save(os.path.join(output_dir, 'feature_names.npy'), feature_names)
     np.save(os.path.join(output_dir, 'dataset_info.npy'), dataset_info)
     
     # Create and save train/test split if requested
     if split:
-        X_train, X_test, y_train, y_test, train_records, test_records = create_train_test_split(
-            X, y, records, test_size=test_size
+        # Split based on records
+        train_records, test_records = train_test_split(
+            valid_records, test_size=test_size, random_state=42
         )
         
+        # Create masks for train and test
+        train_mask = np.isin(valid_records, train_records)
+        test_mask = np.isin(valid_records, test_records)
+        
+        # Split data
+        X_train = X[train_mask]
+        y_train = y[train_mask]
+        X_test = X[test_mask]
+        y_test = y[test_mask]
+        
         split_info = {
-            'train_size': len(y_train),
-            'test_size': len(y_test),
-            'train_positive': int(np.sum(y_train)),
-            'test_positive': int(np.sum(y_test)),
-            'train_positive_percentage': np.sum(y_train) / len(y_train) * 100,
-            'test_positive_percentage': np.sum(y_test) / len(y_test) * 100,
-            'train_records': train_records.tolist(),
-            'test_records': test_records.tolist()
+            'train_size': np.sum(~np.isnan(y_train)),
+            'test_size': np.sum(~np.isnan(y_test)),
+            'train_positive': int(np.nansum(y_train)),
+            'test_positive': int(np.nansum(y_test)),
+            'train_positive_percentage': np.nansum(y_train) / np.sum(~np.isnan(y_train)) * 100,
+            'test_positive_percentage': np.nansum(y_test) / np.sum(~np.isnan(y_test)) * 100,
+            'train_records': train_records,
+            'test_records': test_records
         }
         
         dataset_info['split_info'] = split_info
@@ -438,10 +464,10 @@ def prepare_full_dataset(annotations_dict,
     
     # Print dataset summary
     print("\nDataset Summary:")
-    print(f"Total samples: {dataset_info['n_samples']}")
+    print(f"Total records: {dataset_info['n_records']}")
+    print(f"Max windows per record: {dataset_info['max_windows']}")
     print(f"Features: {dataset_info['n_features']}")
     print(f"Positive examples: {dataset_info['n_positive']} ({dataset_info['positive_percentage']:.2f}%)")
-    print(f"Records: {dataset_info['n_records']}")
     print(f"Original contractions: {total_original_contractions}, Visible in processed data: {total_visible_contractions}")
     print(f"Time adjustment for artifact removal: {'Applied' if not no_adjust_trim else 'Not applied'}")
     print(f"Data saved to: {output_dir}")
