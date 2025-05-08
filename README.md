@@ -1,6 +1,6 @@
-# EHG Contraction Prediction Project
+# EHG Signal Analysis and Contraction Detection
 
-This project aims to develop methods for predicting contractions in pregnant women using electrohysterogram (EHG) data from the Icelandic 16-electrode Electrohysterogram Database available on PhysioNet.
+This project analyzes Electrohysterogram (EHG) signals to detect uterine contractions using both traditional machine learning and deep learning approaches. The system processes raw EHG signals, extracts features, and trains models to identify contraction events.
 
 ## Dataset
 
@@ -13,92 +13,122 @@ When using this resource, please cite the original publication:
 
 ```
 .
-├── data/                   # Directory for storing downloaded data
-├── models/                 # Contains models for contraction prediction    
+├── data/                   # Directory for storing downloaded and processed data
+├── models/                 # Contains trained models for contraction prediction    
 ├── notebooks/              # Jupyter notebooks for analysis
 ├── results/                # Results from analyses and models
 ├── scripts/                # Python scripts
 ├── requirements.txt        # Required Python packages
-└── README.md               # This file
+└── README.md              # This file
 ```
 
-## Getting Started
-
-### Prerequisites
-
-
-### Installation
+## Setup
 
 1. Clone this repository:
-   ```
+   ```bash
    git clone https://github.com/ryancwelch/Innaccel.git
    cd Innaccel
    ```
 
-2. Create and activate a virtual environment (recommended):
-   ```
+2. Create and activate a virtual environment:
+   ```bash
    python -m venv venv
-   source venv/bin/activate
+   source venv/bin/activate  # On Unix/macOS
+   # or
+   .\venv\Scripts\activate  # On Windows
    ```
 
 3. Install required packages:
-   ```
+   ```bash
    pip install -r requirements.txt
    ```
 
-### Downloading the Data
+## Data Processing
 
-Use the provided script to download data from PhysioNet:
+The project processes EHG signals through several stages:
 
-```
-python scripts/download_data.py --matlab --extract
-```
-<!-- 
-### Running the Analysis
+1. **Signal Preprocessing** (`scripts/preprocess_ehg.py`):
+   - Loads raw EHG signals
+   - Removes artifacts
+   - Applies bandpass filtering
+   - Downsamples to 20 Hz
+   - Extracts annotated contractions
 
-1. Start Jupyter Notebook:
+2. **Feature Extraction** (`scripts/extract_features.py`):
+   - Extracts time and frequency domain features
+   - Generates feature matrices for machine learning
+
+3. **Sequence Preparation** (`scripts/prepare_sequences.py`):
+   - Creates sequences for LSTM training
+   - Handles variable-length sequences
+   - Splits data into train/test sets
+
+## Model Training
+
+### Traditional Machine Learning
+
+1. **Baseline Models** (`scripts/train_and_evaluate.py`)
+   - Trains and evaluates baseline ML classifiers on all datasets
+
+2. **Baseline Models with Balancing** (`scripts/train_and_evaluate_balanced.py`)
+   - Performs various class balancing techniques
+   - Trains and evaluates ML classifiers on balanced datasets
+
+### Deep Learning
+
+1. **LSTM** (`scripts/train_lstm_sequence.py`)
+   - Trains and evaluates LSTM model on sequential data
+
+2. **CNN-LSTM** (`scripts/train_cnn_lstm_sequence.py`)
+   - Trains and evaluates CNN-LSTM model on sequential data
+
+3. **BERT** (`scripts/train_transformer_sequence.py`)
+   - Trains and evaluates BERT model on sequential data
+
+## Usage
+
+1. **Download the Data**:
+   ```bash
+   python scripts/download_data.py --matlab --extract
    ```
-   jupyter notebook
+
+2. **Process Signals**:
+   ```bash
+   python scripts/preprocess_ehg.py
    ```
 
-2. Open the `notebooks/contraction_prediction.ipynb` notebook and follow the step-by-step analysis. -->
+3. **Extract Features**:
+   ```bash
+   python scripts/extract_features.py
+   ```
 
-## Processing EHG Data
+4. **Train Models**:
+   ```bash
+   python scripts/train_and_evaluate.py
+   python scripts/train_and_evaluate_balanced.py
+   python scripts/train_lstm_sequence.py
+   python scripts/train_cnn_lstm_sequence.py
+   python scripts/train_transformer_sequence.py
+   ```
 
-The `process_ehg.py` script provides functions for:
+## Results
 
-1. Loading EHG records
-2. Preprocessing and filtering signals
-3. Detecting contractions
-4. Extracting features for prediction
-5. Visualizing signals and contractions
+The project generates various outputs:
 
-<!-- Example usage:
-
-```
-python scripts/process_ehg.py --record ice001_l --channel 0 --save
-``` -->
-
-This will process the record, detect contractions, and save the results to the `results/` directory.
-
-<!-- ## Building Prediction Models
-
-The Jupyter notebook contains examples of how to:
-
-1. Extract features from EHG signals
-2. Build machine learning models for contraction prediction
-3. Evaluate model performance
-4. Visualize results
+- **Processed Signals**: Preprocessed EHG signals in `data/processed/`
+- **Feature Matrices**: Extracted features in `data/contraction_data/`
+- **Trained Models**: Saved models in `models/`
+- **Visualizations**: Performance plots and signal visualizations in `results/`
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. -->
+This project is licensed under the MIT License - see the LICENSE file for details.
 
-<!-- ## Acknowledgments
+## Acknowledgments
 
 - The original dataset providers: Ásgeir Alexandersson and colleagues
 - PhysioNet for hosting the dataset
-- MIT Laboratory for Computational Physiology for maintaining PhysioNet -->
+- MIT Laboratory for Computational Physiology for maintaining PhysioNet
 
 ## References
 
